@@ -24,9 +24,13 @@ const userStates = new Map();
 const DATA_DIR = path.join(__dirname, "data");
 const DB_FILE = path.join(DATA_DIR, "db.json");
 
-const BOT_COMMANDS = [
+const USER_COMMANDS = [
   { command: "start", description: "Botni qayta boshlash" },
   { command: "menu", description: "Asosiy menyuni ochish" },
+];
+
+const ADMIN_COMMANDS = [
+  ...USER_COMMANDS,
   { command: "admin", description: "Admin panel" },
   { command: "elon", description: "Kanalga e'lon joylash" },
   { command: "broadcast", description: "Userlarga xabar yuborish" },
@@ -421,6 +425,15 @@ bot.use(async (ctx, next) => {
 
   const subscribed = await isSubscribed(ctx.from.id);
   if (!subscribed) {
+    if (ctx.message?.text === "/start" || ctx.message?.text === "/menu") {
+      clearState(ctx.from.id);
+      await ctx.reply("Eski ma'lumotlar tozalandi.", Markup.removeKeyboard());
+    }
+
+    if (ctx.callbackQuery) {
+      await ctx.answerCbQuery().catch(() => {});
+    }
+
     await showSubscriptionMessage(ctx);
     return;
   }
@@ -897,7 +910,17 @@ bot.catch((error, ctx) => {
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
 
-bot.telegram.setMyCommands(BOT_COMMANDS)
+async function configureBotCommands() {
+  await bot.telegram.setMyCommands(USER_COMMANDS);
+  await bot.telegram.setMyCommands(ADMIN_COMMANDS, {
+    scope: {
+      type: "chat",
+      chat_id: ADMIN_ID,
+    },
+  });
+}
+
+configureBotCommands()
   .then(() => bot.launch(() => {
     console.log("TeskorUsta24 bot ishga tushdi.");
   }))
