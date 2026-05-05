@@ -18,6 +18,11 @@ if (!ADMIN_ID || Number.isNaN(ADMIN_ID)) {
 const bot = new Telegraf(BOT_TOKEN);
 const userStates = new Map();
 
+const BOT_COMMANDS = [
+  { command: "start", description: "Botni qayta boshlash" },
+  { command: "menu", description: "Asosiy menyuni ochish" },
+];
+
 const ACTIONS = {
   BECOME_MASTER: "become_master",
   CONTACT_ADMIN: "contact_admin",
@@ -113,6 +118,12 @@ async function showMainMenu(ctx, text = "✨ Assalomu alaykum!\n\nTeskorUsta24 b
   await ctx.reply(text, mainMenu);
 }
 
+async function resetAndShowMainMenu(ctx, text) {
+  clearState(ctx.from.id);
+  await ctx.reply("Eski ma'lumotlar tozalandi.", Markup.removeKeyboard());
+  await showMainMenu(ctx, text);
+}
+
 async function safeSendToAdmin(message, extra = {}) {
   try {
     await bot.telegram.sendMessage(ADMIN_ID, message, {
@@ -160,19 +171,17 @@ function buildMasterAdminMessage(data, ctx) {
 }
 
 bot.start(async (ctx) => {
-  clearState(ctx.from.id);
-  await showMainMenu(ctx);
+  await resetAndShowMainMenu(ctx);
 });
 
 bot.command("menu", async (ctx) => {
-  clearState(ctx.from.id);
-  await showMainMenu(ctx);
+  await resetAndShowMainMenu(ctx);
 });
 
 bot.action(ACTIONS.CANCEL, async (ctx) => {
   await ctx.answerCbQuery();
-  clearState(ctx.from.id);
   await ctx.reply("Bekor qilindi.", Markup.removeKeyboard());
+  clearState(ctx.from.id);
   await showMainMenu(ctx);
 });
 
@@ -199,18 +208,21 @@ bot.action(ACTIONS.CONFIRM_MASTER, async (ctx) => {
 
 bot.action(ACTIONS.BECOME_MASTER, async (ctx) => {
   await ctx.answerCbQuery();
+  clearState(ctx.from.id);
   setState(ctx.from.id, STEPS.MASTER_NAME, {});
   await ctx.reply("Ismingizni yozing:", cancelKeyboard);
 });
 
 bot.action(ACTIONS.CONTACT_ADMIN, async (ctx) => {
   await ctx.answerCbQuery();
+  clearState(ctx.from.id);
   setState(ctx.from.id, STEPS.CONTACT_MESSAGE, {});
   await ctx.reply("Adminga yubormoqchi bo'lgan xabaringizni yozing:", cancelKeyboard);
 });
 
 bot.action(ACTIONS.REPORT_PROBLEM, async (ctx) => {
   await ctx.answerCbQuery();
+  clearState(ctx.from.id);
   setState(ctx.from.id, STEPS.PROBLEM_MESSAGE, {});
   await ctx.reply("Muammo haqida yozing. Iloji boricha batafsil tushuntiring:", cancelKeyboard);
 });
@@ -273,8 +285,7 @@ bot.on("text", async (ctx) => {
   }
 
   if (text === "/start" || text === "/menu") {
-    clearState(userId);
-    await showMainMenu(ctx);
+    await resetAndShowMainMenu(ctx);
     return;
   }
 
@@ -426,6 +437,11 @@ bot.catch((error, ctx) => {
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
 
-bot.launch(() => {
-  console.log("TeskorUsta24 bot ishga tushdi.");
-});
+bot.telegram.setMyCommands(BOT_COMMANDS)
+  .then(() => bot.launch(() => {
+    console.log("TeskorUsta24 bot ishga tushdi.");
+  }))
+  .catch((error) => {
+    console.error("Bot menyusini sozlashda xatolik:", error);
+    process.exit(1);
+  });
