@@ -49,6 +49,7 @@ const STEPS = {
   MASTER_PHONE: "master_phone",
   MASTER_SERVICE: "master_service",
   MASTER_REGION: "master_region",
+  MASTER_DISTRICT: "master_district",
   MASTER_CONFIRM: "master_confirm",
   ADMIN_ANNOUNCE: "admin_announce",
   ADMIN_BROADCAST: "admin_broadcast",
@@ -87,10 +88,51 @@ const serviceTypes = [
 
 const SERVICE_BACK = "⬅️ Orqaga";
 
+const regionTypes = [
+  "Toshkent",
+  "Qashqadaryo",
+];
+
+const districtTypes = {
+  Toshkent: [
+    "Chilonzor",
+    "Yunusobod",
+    "Sergeli",
+    "Olmazor",
+    "Shayxontohur",
+    "Uchtepa",
+    "Yakkasaroy",
+    "Mirzo Ulug‘bek",
+    "Mirobod",
+    "Yashnobod",
+    "Bektemir",
+    "Yangihayot",
+  ],
+  Qashqadaryo: [
+    "Qarshi",
+    "Shahrisabz",
+    "Kitob",
+    "Koson",
+    "G‘uzor",
+    "Dehqonobod",
+  ],
+};
+
 const serviceOptions = serviceTypes.map((service) => ({
   label: service,
   value: service,
 }));
+
+function keyboardRows(items, perRow = 2) {
+  return items.reduce((rows, item, index) => {
+    if (index % perRow === 0) {
+      rows.push([]);
+    }
+
+    rows[rows.length - 1].push(item);
+    return rows;
+  }, []);
+}
 
 const mainMenu = Markup.inlineKeyboard([
   [Markup.button.callback("🧰 Usta bo'lish", ACTIONS.BECOME_MASTER)],
@@ -118,21 +160,28 @@ const adminKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback("📊 Statistika", ACTIONS.ADMIN_STATS)],
 ]);
 
-const serviceKeyboardRows = serviceOptions.reduce((rows, service, index) => {
-  if (index % 2 === 0) {
-    rows.push([]);
-  }
-
-  rows[rows.length - 1].push(service.label);
-  return rows;
-}, []);
-
 const serviceKeyboard = Markup.keyboard([
-  ...serviceKeyboardRows,
+  ...keyboardRows(serviceOptions.map((service) => service.label)),
   [SERVICE_BACK],
 ])
   .oneTime()
   .resize();
+
+const regionKeyboard = Markup.keyboard([
+  ...keyboardRows(regionTypes),
+  [SERVICE_BACK],
+])
+  .oneTime()
+  .resize();
+
+function districtKeyboard(region) {
+  return Markup.keyboard([
+    ...keyboardRows(districtTypes[region] || []),
+    [SERVICE_BACK],
+  ])
+    .oneTime()
+    .resize();
+}
 
 const phoneKeyboard = Markup.keyboard([
   [Markup.button.contactRequest("📱 Telefon raqamni yuborish")],
@@ -322,7 +371,7 @@ function buildMasterSummary(data) {
     `👤 Ism: ${data.name}\n` +
     `📞 Telefon: ${data.phone}\n` +
     `🧰 Xizmat turi: ${data.service}\n` +
-    `📍 Hudud: ${data.region}\n\n` +
+    `📍 Hudud: ${data.region}, ${data.district}\n\n` +
     "Ma'lumotlar to'g'ri bo'lsa tasdiqlang:"
   );
 }
@@ -333,7 +382,7 @@ function buildMasterAdminMessage(data, ctx) {
     `👤 <b>Ism:</b> ${escapeHtml(data.name)}\n` +
     `📞 <b>Telefon:</b> ${escapeHtml(data.phone)}\n` +
     `🔧 <b>Xizmat turi:</b> ${escapeHtml(data.service)}\n` +
-    `📍 <b>Hudud:</b> ${escapeHtml(data.region)}\n` +
+    `📍 <b>Hudud:</b> ${escapeHtml(data.region)}, ${escapeHtml(data.district)}\n` +
     `💬 <b>Telegram:</b> ${escapeHtml(username(ctx))}\n` +
     `🆔 <b>User ID:</b> <code>${ctx.from.id}</code>`
   );
@@ -345,7 +394,7 @@ function buildMasterChannelPost(master) {
     `👤 <b>Ism:</b> ${escapeHtml(master.name)}\n` +
     `📞 <b>Telefon:</b> ${escapeHtml(master.phone)}\n` +
     `🔧 <b>Xizmat:</b> ${escapeHtml(master.service)}\n` +
-    `📍 <b>Hudud:</b> ${escapeHtml(master.region)}\n` +
+    `📍 <b>Hudud:</b> ${escapeHtml(master.region)}, ${escapeHtml(master.district)}\n` +
     `💬 <b>Telegram:</b> ${escapeHtml(master.username)}`
   );
 }
@@ -581,7 +630,7 @@ bot.action(/^service:(.+)$/, async (ctx) => {
     service,
   });
 
-  await ctx.reply("Qaysi hududda ishlaysiz? Masalan: Toshkent, Chilonzor", cancelKeyboard);
+  await ctx.reply("📍 Qaysi hududda ishlaysiz?", regionKeyboard);
 });
 
 bot.on("contact", async (ctx) => {
@@ -712,23 +761,55 @@ bot.on("text", async (ctx) => {
         service,
       });
 
-      await ctx.reply("Qaysi hududda ishlaysiz? Masalan: Toshkent, Chilonzor", Markup.removeKeyboard());
-      await ctx.reply("Hududni yozing:", cancelKeyboard);
+      await ctx.reply("📍 Qaysi hududda ishlaysiz?", regionKeyboard);
       break;
     }
 
     case STEPS.MASTER_REGION: {
-      if (text.length < 2) {
-        await ctx.reply("Iltimos, hududni to'g'ri kiriting:");
+      if (text === SERVICE_BACK) {
+        setState(userId, STEPS.MASTER_SERVICE, state.data);
+        await ctx.reply("🧰 Xizmat turini tanlang:", serviceKeyboard);
+        return;
+      }
+
+      if (!regionTypes.includes(text)) {
+        await ctx.reply("Iltimos, hududni faqat tugmalardan tanlang.", regionKeyboard);
+        return;
+      }
+
+      setState(userId, STEPS.MASTER_DISTRICT, {
+        ...state.data,
+        region: text,
+      });
+
+      await ctx.reply(`📍 ${text} bo'yicha tuman/shaharni tanlang:`, districtKeyboard(text));
+      break;
+    }
+
+    case STEPS.MASTER_DISTRICT: {
+      if (text === SERVICE_BACK) {
+        setState(userId, STEPS.MASTER_REGION, {
+          name: state.data.name,
+          phone: state.data.phone,
+          service: state.data.service,
+        });
+        await ctx.reply("📍 Hududni qayta tanlang:", regionKeyboard);
+        return;
+      }
+
+      const districts = districtTypes[state.data.region] || [];
+      if (!districts.includes(text)) {
+        await ctx.reply("Iltimos, tuman/shaharni faqat tugmalardan tanlang.", districtKeyboard(state.data.region));
         return;
       }
 
       const data = {
         ...state.data,
-        region: text,
+        district: text,
       };
 
       setState(userId, STEPS.MASTER_CONFIRM, data);
+      await ctx.reply("Hudud tanlandi.", Markup.removeKeyboard());
       await ctx.reply(buildMasterSummary(data), confirmKeyboard);
       break;
     }
