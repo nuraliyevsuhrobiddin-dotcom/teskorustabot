@@ -1,0 +1,22 @@
+{
+  "name": "teskorusta24-bot",
+  "version": "1.0.0",
+  "description": "TeskorUsta24 Telegram bot for master registration and admin contact",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "keywords": [
+    "telegram",
+    "telegraf",
+    "bot",
+    "teskorusta24"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "telegraf": "^4.16.3"
+  }
+}
