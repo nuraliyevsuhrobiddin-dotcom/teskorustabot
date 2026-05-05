@@ -38,10 +38,13 @@ const ADMIN_COMMANDS = [
 ];
 
 const ACTIONS = {
+  CREATE_ORDER: "create_order",
+  URGENT_ORDER: "urgent_order",
   BECOME_MASTER: "become_master",
   CONTACT_ADMIN: "contact_admin",
   REPORT_PROBLEM: "report_problem",
   CONFIRM_MASTER: "confirm_master",
+  CONFIRM_ORDER: "confirm_order",
   CHECK_SUBSCRIPTION: "check_subscription",
   ADMIN_ANNOUNCE: "admin_announce",
   ADMIN_BROADCAST: "admin_broadcast",
@@ -51,6 +54,14 @@ const ACTIONS = {
 };
 
 const STEPS = {
+  ORDER_SERVICE: "order_service",
+  ORDER_REGION: "order_region",
+  ORDER_DISTRICT: "order_district",
+  ORDER_TIME: "order_time",
+  ORDER_PHONE: "order_phone",
+  ORDER_DETAILS: "order_details",
+  ORDER_MEDIA: "order_media",
+  ORDER_CONFIRM: "order_confirm",
   MASTER_NAME: "master_name",
   MASTER_PHONE: "master_phone",
   MASTER_SERVICE: "master_service",
@@ -93,6 +104,14 @@ const serviceTypes = [
 ];
 
 const SERVICE_BACK = "⬅️ Orqaga";
+const SKIP_MEDIA = "⏭ O'tkazib yuborish";
+
+const orderTimeTypes = [
+  "🚨 Hozir",
+  "Bugun",
+  "Ertaga",
+  "Dam olish kuni",
+];
 
 const regionTypes = [
   "Toshkent",
@@ -141,6 +160,8 @@ function keyboardRows(items, perRow = 2) {
 }
 
 const mainMenu = Markup.inlineKeyboard([
+  [Markup.button.callback("🧰 Usta chaqirish", ACTIONS.CREATE_ORDER)],
+  [Markup.button.callback("🚨 Shoshilinch chaqiruv", ACTIONS.URGENT_ORDER)],
   [Markup.button.callback("🧰 Usta bo'lish", ACTIONS.BECOME_MASTER)],
   [Markup.button.callback("💬 Admin bilan bog'lanish", ACTIONS.CONTACT_ADMIN)],
   [Markup.button.callback("🚨 Muammo yozish", ACTIONS.REPORT_PROBLEM)],
@@ -153,6 +174,11 @@ const cancelKeyboard = Markup.inlineKeyboard([
 
 const confirmKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback("✅ Tasdiqlash", ACTIONS.CONFIRM_MASTER)],
+  [Markup.button.callback("❌ Bekor qilish", ACTIONS.CANCEL)],
+]);
+
+const orderConfirmKeyboard = Markup.inlineKeyboard([
+  [Markup.button.callback("✅ Buyurtmani yuborish", ACTIONS.CONFIRM_ORDER)],
   [Markup.button.callback("❌ Bekor qilish", ACTIONS.CANCEL)],
 ]);
 
@@ -177,6 +203,20 @@ const serviceKeyboard = Markup.keyboard([
 
 const regionKeyboard = Markup.keyboard([
   ...keyboardRows(regionTypes),
+  [SERVICE_BACK],
+])
+  .oneTime()
+  .resize();
+
+const orderTimeKeyboard = Markup.keyboard([
+  ...keyboardRows(orderTimeTypes),
+  [SERVICE_BACK],
+])
+  .oneTime()
+  .resize();
+
+const mediaKeyboard = Markup.keyboard([
+  [SKIP_MEDIA],
   [SERVICE_BACK],
 ])
   .oneTime()
@@ -220,7 +260,9 @@ function createDefaultDb() {
   return {
     users: {},
     masters: [],
+    orders: [],
     nextMasterId: 1,
+    nextOrderId: 1,
   };
 }
 
@@ -284,6 +326,34 @@ function updateMasterStatus(masterId, status) {
   master.updatedAt = new Date().toISOString();
   writeDb(db);
   return master;
+}
+
+function saveOrderRequest(data, ctx) {
+  const db = readDb();
+  const order = {
+    id: db.nextOrderId,
+    status: "new",
+    userId: ctx.from.id,
+    username: username(ctx),
+    ...data,
+    createdAt: new Date().toISOString(),
+  };
+
+  db.nextOrderId += 1;
+  db.orders.push(order);
+  writeDb(db);
+  return order;
+}
+
+function updateOrderStatus(orderId, status) {
+  const db = readDb();
+  const order = db.orders.find((item) => item.id === orderId);
+  if (!order) return null;
+
+  order.status = status;
+  order.updatedAt = new Date().toISOString();
+  writeDb(db);
+  return order;
 }
 
 function isAdmin(ctx) {
@@ -384,6 +454,19 @@ function buildMasterSummary(data) {
   );
 }
 
+function buildOrderSummary(data) {
+  return (
+    "📋 Buyurtmangizni tekshiring:\n\n" +
+    `🔧 Xizmat: ${data.service}\n` +
+    `📍 Hudud: ${data.region}, ${data.district}\n` +
+    `⏰ Vaqt: ${data.time}\n` +
+    `📞 Telefon: ${data.phone}\n` +
+    `📝 Muammo: ${data.details}\n` +
+    `📎 Media: ${data.media ? "bor" : "yo'q"}\n\n` +
+    "Ma'lumotlar to'g'ri bo'lsa yuboring:"
+  );
+}
+
 function buildMasterAdminMessage(data, ctx) {
   return (
     "🛠 <b>Yangi usta arizasi</b>\n\n" +
@@ -394,6 +477,44 @@ function buildMasterAdminMessage(data, ctx) {
     `💬 <b>Telegram:</b> ${escapeHtml(username(ctx))}\n` +
     `🆔 <b>User ID:</b> <code>${ctx.from.id}</code>`
   );
+}
+
+function buildOrderAdminMessage(order) {
+  return (
+    `${order.urgent ? "🚨 <b>SHOSHILINCH BUYURTMA</b>" : "🧰 <b>Yangi buyurtma</b>"}\n\n` +
+    `🆔 <b>Buyurtma:</b> #${order.id}\n` +
+    `🔧 <b>Xizmat:</b> ${escapeHtml(order.service)}\n` +
+    `📍 <b>Hudud:</b> ${escapeHtml(order.region)}, ${escapeHtml(order.district)}\n` +
+    `⏰ <b>Vaqt:</b> ${escapeHtml(order.time)}\n` +
+    `📞 <b>Telefon:</b> ${escapeHtml(order.phone)}\n` +
+    `📝 <b>Muammo:</b> ${escapeHtml(order.details)}\n` +
+    `💬 <b>Telegram:</b> ${escapeHtml(order.username)}\n` +
+    `🆔 <b>User ID:</b> <code>${order.userId}</code>`
+  );
+}
+
+function orderAdminKeyboard(orderId) {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("👀 Ko'rilmoqda", `order:status:${orderId}:reviewing`),
+      Markup.button.callback("🧰 Usta topildi", `order:status:${orderId}:assigned`),
+    ],
+    [
+      Markup.button.callback("✅ Yakunlandi", `order:status:${orderId}:done`),
+      Markup.button.callback("❌ Bekor", `order:status:${orderId}:cancelled`),
+    ],
+  ]);
+}
+
+function orderStatusText(status) {
+  const labels = {
+    reviewing: "Admin buyurtmangizni ko'rib chiqyapti.",
+    assigned: "Buyurtmangiz uchun usta topildi. Tez orada bog'lanamiz.",
+    done: "Buyurtmangiz yakunlandi. Ishonchingiz uchun rahmat!",
+    cancelled: "Buyurtmangiz bekor qilindi.",
+  };
+
+  return labels[status] || "Buyurtma holati yangilandi.";
 }
 
 function buildPromoFooter() {
@@ -560,9 +681,12 @@ bot.action(ACTIONS.ADMIN_STATS, async (ctx) => {
 
   const db = readDb();
   const masters = db.masters || [];
+  const orders = db.orders || [];
   const pending = masters.filter((item) => item.status === "pending").length;
   const approved = masters.filter((item) => item.status === "approved").length;
   const rejected = masters.filter((item) => item.status === "rejected").length;
+  const newOrders = orders.filter((item) => item.status === "new").length;
+  const urgentOrders = orders.filter((item) => item.urgent && item.status !== "done" && item.status !== "cancelled").length;
 
   await ctx.reply(
     "📊 Statistika\n\n" +
@@ -570,7 +694,10 @@ bot.action(ACTIONS.ADMIN_STATS, async (ctx) => {
     `🧰 Jami arizalar: ${masters.length}\n` +
     `⏳ Kutilmoqda: ${pending}\n` +
     `✅ Tasdiqlangan: ${approved}\n` +
-    `❌ Rad etilgan: ${rejected}`
+    `❌ Rad etilgan: ${rejected}\n\n` +
+    `📦 Buyurtmalar: ${orders.length}\n` +
+    `🆕 Yangi buyurtmalar: ${newOrders}\n` +
+    `🚨 Aktiv shoshilinch: ${urgentOrders}`
   );
 });
 
@@ -579,6 +706,23 @@ bot.action(ACTIONS.CANCEL, async (ctx) => {
   await ctx.reply("Bekor qilindi.", Markup.removeKeyboard());
   clearState(ctx.from.id);
   await showMainMenu(ctx);
+});
+
+bot.action(ACTIONS.CREATE_ORDER, async (ctx) => {
+  await ctx.answerCbQuery();
+  clearState(ctx.from.id);
+  setState(ctx.from.id, STEPS.ORDER_SERVICE, { urgent: false });
+  await ctx.reply("🧰 Qanday xizmat kerak?", serviceKeyboard);
+});
+
+bot.action(ACTIONS.URGENT_ORDER, async (ctx) => {
+  await ctx.answerCbQuery();
+  clearState(ctx.from.id);
+  setState(ctx.from.id, STEPS.ORDER_SERVICE, {
+    urgent: true,
+    time: "🚨 Hozir",
+  });
+  await ctx.reply("🚨 Shoshilinch chaqiruv. Qanday xizmat kerak?", serviceKeyboard);
 });
 
 bot.action(ACTIONS.CONFIRM_MASTER, async (ctx) => {
@@ -601,6 +745,50 @@ bot.action(ACTIONS.CONFIRM_MASTER, async (ctx) => {
 
   await ctx.reply("👉 Rahmat! Sizning so'rovingiz yuborildi", Markup.removeKeyboard());
   await showMainMenu(ctx, "Yana qanday yordam bera olamiz?");
+});
+
+bot.action(ACTIONS.CONFIRM_ORDER, async (ctx) => {
+  await ctx.answerCbQuery();
+
+  const state = userStates.get(ctx.from.id);
+  if (!state || state.step !== STEPS.ORDER_CONFIRM) {
+    await showMainMenu(ctx, "Iltimos, buyurtmani menyudan qayta boshlang:");
+    return;
+  }
+
+  const order = saveOrderRequest(state.data, ctx);
+  const sent = await safeSendToAdmin(buildOrderAdminMessage(order), orderAdminKeyboard(order.id));
+  clearState(ctx.from.id);
+
+  if (!sent) {
+    await ctx.reply("Kechirasiz, buyurtmani adminga yuborishda xatolik bo'ldi. Keyinroq urinib ko'ring.", Markup.removeKeyboard());
+    return;
+  }
+
+  if (order.media) {
+    await bot.telegram.forwardMessage(ADMIN_ID, order.userId, order.media.messageId).catch((error) => {
+      console.error("Buyurtma mediasini adminga forward qilishda xatolik:", error);
+    });
+  }
+
+  await ctx.reply(`✅ Buyurtmangiz qabul qilindi. Raqam: #${order.id}`, Markup.removeKeyboard());
+  await showMainMenu(ctx, "Yana qanday yordam bera olamiz?");
+});
+
+bot.action(/^order:status:(\d+):(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  if (!isAdmin(ctx)) return;
+
+  const order = updateOrderStatus(Number(ctx.match[1]), ctx.match[2]);
+  if (!order) {
+    await ctx.reply("Buyurtma topilmadi.");
+    return;
+  }
+
+  await ctx.reply(`Buyurtma #${order.id} holati yangilandi: ${order.status}`);
+  await bot.telegram.sendMessage(order.userId, `📌 Buyurtma #${order.id}: ${orderStatusText(order.status)}`).catch((error) => {
+    console.error("Buyurtma statusini userga yuborishda xatolik:", error);
+  });
 });
 
 bot.action(/^master:approve:(\d+)$/, async (ctx) => {
@@ -672,7 +860,7 @@ bot.action(/^service:(.+)$/, async (ctx) => {
 bot.on("contact", async (ctx) => {
   const state = userStates.get(ctx.from.id);
 
-  if (!state || state.step !== STEPS.MASTER_PHONE) {
+  if (!state || (state.step !== STEPS.MASTER_PHONE && state.step !== STEPS.ORDER_PHONE)) {
     await ctx.reply("Telefon raqam qabul qilindi, ammo hozir ro'yxatdan o'tish jarayoni aktiv emas.");
     return;
   }
@@ -684,6 +872,17 @@ bot.on("contact", async (ctx) => {
   }
 
   const phone = contact.phone_number;
+  if (state.step === STEPS.ORDER_PHONE) {
+    setState(ctx.from.id, STEPS.ORDER_DETAILS, {
+      ...state.data,
+      phone,
+    });
+
+    await ctx.reply("Telefon raqamingiz qabul qilindi.", Markup.removeKeyboard());
+    await ctx.reply("📝 Muammo haqida qisqacha yozing. Masalan: kran oqyapti, svet yo'q, konditsioner ishlamayapti.", cancelKeyboard);
+    return;
+  }
+
   setState(ctx.from.id, STEPS.MASTER_SERVICE, {
     ...state.data,
     phone,
@@ -709,6 +908,176 @@ bot.on("text", async (ctx) => {
   }
 
   switch (state.step) {
+    case STEPS.ORDER_SERVICE: {
+      if (text === SERVICE_BACK) {
+        clearState(userId);
+        await ctx.reply("Asosiy menyuga qaytdingiz.", Markup.removeKeyboard());
+        await showMainMenu(ctx);
+        return;
+      }
+
+      const service = getServiceValue(text);
+      if (!serviceTypes.includes(service)) {
+        await ctx.reply("Iltimos, xizmat turini faqat tugmalardan tanlang.", serviceKeyboard);
+        return;
+      }
+
+      setState(userId, STEPS.ORDER_REGION, {
+        ...state.data,
+        service,
+      });
+
+      await ctx.reply("📍 Qaysi hududga usta kerak?", regionKeyboard);
+      break;
+    }
+
+    case STEPS.ORDER_REGION: {
+      if (text === SERVICE_BACK) {
+        setState(userId, STEPS.ORDER_SERVICE, {
+          urgent: state.data.urgent,
+          time: state.data.time,
+        });
+        await ctx.reply("🧰 Xizmat turini tanlang:", serviceKeyboard);
+        return;
+      }
+
+      if (!regionTypes.includes(text)) {
+        await ctx.reply("Iltimos, hududni faqat tugmalardan tanlang.", regionKeyboard);
+        return;
+      }
+
+      setState(userId, STEPS.ORDER_DISTRICT, {
+        ...state.data,
+        region: text,
+      });
+
+      await ctx.reply(`📍 ${text} bo'yicha tuman/shaharni tanlang:`, districtKeyboard(text));
+      break;
+    }
+
+    case STEPS.ORDER_DISTRICT: {
+      if (text === SERVICE_BACK) {
+        setState(userId, STEPS.ORDER_REGION, {
+          urgent: state.data.urgent,
+          time: state.data.time,
+          service: state.data.service,
+        });
+        await ctx.reply("📍 Hududni qayta tanlang:", regionKeyboard);
+        return;
+      }
+
+      const districts = districtTypes[state.data.region] || [];
+      if (!districts.includes(text)) {
+        await ctx.reply("Iltimos, tuman/shaharni faqat tugmalardan tanlang.", districtKeyboard(state.data.region));
+        return;
+      }
+
+      const nextData = {
+        ...state.data,
+        district: text,
+      };
+
+      if (nextData.urgent) {
+        setState(userId, STEPS.ORDER_PHONE, nextData);
+        await ctx.reply("Telefon raqamingizni yuboring. Masalan: +998901234567", phoneKeyboard);
+      } else {
+        setState(userId, STEPS.ORDER_TIME, nextData);
+        await ctx.reply("⏰ Qachon usta kerak?", orderTimeKeyboard);
+      }
+      break;
+    }
+
+    case STEPS.ORDER_TIME: {
+      if (text === SERVICE_BACK) {
+        setState(userId, STEPS.ORDER_DISTRICT, {
+          urgent: state.data.urgent,
+          service: state.data.service,
+          region: state.data.region,
+        });
+        await ctx.reply(`📍 ${state.data.region} bo'yicha tuman/shaharni tanlang:`, districtKeyboard(state.data.region));
+        return;
+      }
+
+      if (!orderTimeTypes.includes(text)) {
+        await ctx.reply("Iltimos, vaqtni tugmalardan tanlang.", orderTimeKeyboard);
+        return;
+      }
+
+      setState(userId, STEPS.ORDER_PHONE, {
+        ...state.data,
+        time: text,
+      });
+
+      await ctx.reply("Telefon raqamingizni yuboring. Masalan: +998901234567", phoneKeyboard);
+      break;
+    }
+
+    case STEPS.ORDER_PHONE: {
+      if (!isValidPhone(text)) {
+        await ctx.reply("Telefon raqam noto'g'ri. Masalan: +998901234567 ko'rinishida yuboring.");
+        return;
+      }
+
+      setState(userId, STEPS.ORDER_DETAILS, {
+        ...state.data,
+        phone: normalizePhone(text),
+      });
+
+      await ctx.reply("Telefon raqamingiz qabul qilindi.", Markup.removeKeyboard());
+      await ctx.reply("📝 Muammo haqida qisqacha yozing. Masalan: kran oqyapti, svet yo'q, konditsioner ishlamayapti.", cancelKeyboard);
+      break;
+    }
+
+    case STEPS.ORDER_DETAILS: {
+      if (text.length < 5) {
+        await ctx.reply("Iltimos, muammoni biroz batafsilroq yozing:");
+        return;
+      }
+
+      setState(userId, STEPS.ORDER_MEDIA, {
+        ...state.data,
+        details: text,
+      });
+
+      await ctx.reply("📸 Muammo rasmini yoki videosini yuboring. Xohlamasangiz, o'tkazib yuboring.", mediaKeyboard);
+      break;
+    }
+
+    case STEPS.ORDER_MEDIA: {
+      if (text === SERVICE_BACK) {
+        setState(userId, STEPS.ORDER_DETAILS, {
+          urgent: state.data.urgent,
+          service: state.data.service,
+          region: state.data.region,
+          district: state.data.district,
+          time: state.data.time,
+          phone: state.data.phone,
+        });
+        await ctx.reply("📝 Muammo haqida qayta yozing:", cancelKeyboard);
+        return;
+      }
+
+      if (text !== SKIP_MEDIA) {
+        await ctx.reply("Iltimos, rasm/video yuboring yoki o'tkazib yuborish tugmasini bosing.", mediaKeyboard);
+        return;
+      }
+
+      const data = {
+        ...state.data,
+        media: null,
+      };
+
+      setState(userId, STEPS.ORDER_CONFIRM, data);
+      await ctx.reply("Media o'tkazib yuborildi.", Markup.removeKeyboard());
+      await ctx.reply(buildOrderSummary(data), orderConfirmKeyboard);
+      break;
+    }
+
+    case STEPS.ORDER_CONFIRM: {
+      await ctx.reply("Iltimos, buyurtmani yuborish uchun tasdiqlash tugmasini bosing.", orderConfirmKeyboard);
+      break;
+    }
+
     case STEPS.ADMIN_ANNOUNCE: {
       if (!isAdmin(ctx)) {
         clearState(userId);
@@ -904,6 +1273,32 @@ bot.on("message", async (ctx) => {
 
   if (!state) {
     await showMainMenu(ctx, "Iltimos, menyudan birini tanlang:");
+    return;
+  }
+
+  if (state.step === STEPS.ORDER_MEDIA) {
+    const hasMedia = Boolean(ctx.message.photo || ctx.message.video);
+    if (!hasMedia) {
+      await ctx.reply("Iltimos, rasm/video yuboring yoki o'tkazib yuborish tugmasini bosing.", mediaKeyboard);
+      return;
+    }
+
+    const data = {
+      ...state.data,
+      media: {
+        messageId: ctx.message.message_id,
+        type: ctx.message.photo ? "photo" : "video",
+      },
+    };
+
+    setState(ctx.from.id, STEPS.ORDER_CONFIRM, data);
+    await ctx.reply("Media qabul qilindi.", Markup.removeKeyboard());
+    await ctx.reply(buildOrderSummary(data), orderConfirmKeyboard);
+    return;
+  }
+
+  if (state.step === STEPS.ORDER_DETAILS) {
+    await ctx.reply("Iltimos, muammo haqida matn ko'rinishida yozing.");
     return;
   }
 

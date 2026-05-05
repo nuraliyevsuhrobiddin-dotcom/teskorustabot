@@ -27,6 +27,9 @@ Copy-Item .env.example .env
 ```env
 BOT_TOKEN=PASTE_YOUR_TELEGRAM_BOT_TOKEN_HERE
 ADMIN_ID=123456789
+CHANNEL_ID=@your_channel_username
+CHANNEL_URL=https://t.me/your_channel_username
+SITE_URL=https://teskorusta.uz
 ```
 
 4. Botni ishga tushiring:
@@ -44,14 +47,30 @@ npm run dev
 ## Bot funksiyalari
 
 - `/start` va `/menu` orqali chiroyli inline menu.
+- Kanalga majburiy obuna tekshiruvi.
+- `Usta chaqirish` flow:
+  - xizmat turi
+  - region
+  - tuman/shahar
+  - vaqt
+  - telefon
+  - muammo matni
+  - ixtiyoriy rasm/video
+- `Shoshilinch chaqiruv` flow.
 - `Usta bo'lish` flow:
   - ism
   - telefon
   - xizmat turi
-  - hudud
+  - region
+  - tuman/shahar
 - Telefon raqam validatsiyasi.
 - Admin bilan bog'lanish.
 - Muammo yozish.
+- Admin panel:
+  - kanalga e'lon joylash
+  - broadcast
+  - statistika
+  - buyurtma statuslarini yangilash
 - Har bir user uchun alohida step-by-step state.
 - Xatoliklar `console.error` orqali log qilinadi.
 
