@@ -60,13 +60,37 @@ const serviceTypes = [
   "Elektrik",
   "Santexnik",
   "Konditsioner",
+  "Gaz ustasi",
+  "Maishiy texnika ustasi",
+  "Remont (uy ta’miri)",
+  "Plitka ustasi",
+  "Malyar (bo‘yoqchi)",
+  "Shtukaturka ustasi",
+  "Pol (laminat, parket)",
+  "Gipsokarton ustasi",
+  "Deraza-eshik ustasi",
+  "Temirchi / payvandchi",
+  "Tom ustasi",
+  "Isitish tizimi",
+  "Kanalizatsiya",
+  "Suv nasos ustasi",
+  "Mebel ustasi",
+  "Santexnika o‘rnatish",
+  "Usta xizmatlari (boshqa)",
+  "Kunlikchi ishchi",
+  "Yuk tashuvchi (gruzchik)",
+  "Tozalovchi (cleaning)",
+  "Bog‘bon",
+  "Qor tozalash",
+  "Qurilish ishchisi",
 ];
 
-const serviceOptions = [
-  { label: "⚡ Elektrik", value: "Elektrik" },
-  { label: "🚿 Santexnik", value: "Santexnik" },
-  { label: "❄️ Konditsioner", value: "Konditsioner" },
-];
+const SERVICE_BACK = "⬅️ Orqaga";
+
+const serviceOptions = serviceTypes.map((service) => ({
+  label: service,
+  value: service,
+}));
 
 const mainMenu = Markup.inlineKeyboard([
   [Markup.button.callback("🧰 Usta bo'lish", ACTIONS.BECOME_MASTER)],
@@ -94,9 +118,18 @@ const adminKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback("📊 Statistika", ACTIONS.ADMIN_STATS)],
 ]);
 
+const serviceKeyboardRows = serviceOptions.reduce((rows, service, index) => {
+  if (index % 2 === 0) {
+    rows.push([]);
+  }
+
+  rows[rows.length - 1].push(service.label);
+  return rows;
+}, []);
+
 const serviceKeyboard = Markup.keyboard([
-  [serviceOptions[0].label, serviceOptions[1].label],
-  [serviceOptions[2].label],
+  ...serviceKeyboardRows,
+  [SERVICE_BACK],
 ])
   .oneTime()
   .resize();
@@ -661,6 +694,13 @@ bot.on("text", async (ctx) => {
     }
 
     case STEPS.MASTER_SERVICE: {
+      if (text === SERVICE_BACK) {
+        clearState(userId);
+        await ctx.reply("Asosiy menyuga qaytdingiz.", Markup.removeKeyboard());
+        await showMainMenu(ctx);
+        return;
+      }
+
       const service = getServiceValue(text);
       if (!serviceTypes.includes(service)) {
         await ctx.reply("Iltimos, xizmat turini faqat tugmalardan tanlang.", serviceKeyboard);
