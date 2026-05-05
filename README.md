@@ -63,6 +63,7 @@ npm run dev
   - xizmat turi
   - region
   - tuman/shahar
+  - kanal e'loni uchun ixtiyoriy rasm
 - Telefon raqam validatsiyasi.
 - Admin bilan bog'lanish.
 - Muammo yozish.

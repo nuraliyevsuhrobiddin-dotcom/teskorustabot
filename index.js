@@ -67,6 +67,7 @@ const STEPS = {
   MASTER_SERVICE: "master_service",
   MASTER_REGION: "master_region",
   MASTER_DISTRICT: "master_district",
+  MASTER_PHOTO: "master_photo",
   MASTER_CONFIRM: "master_confirm",
   ADMIN_ANNOUNCE: "admin_announce",
   ADMIN_BROADCAST: "admin_broadcast",
@@ -443,6 +444,24 @@ async function safeSendToChannel(message, extra = {}) {
   }
 }
 
+async function safeSendPhotoToChannel(photoFileId, caption, extra = {}) {
+  if (!CHANNEL_ID) {
+    return false;
+  }
+
+  try {
+    await bot.telegram.sendPhoto(CHANNEL_ID, photoFileId, {
+      caption,
+      parse_mode: "HTML",
+      ...extra,
+    });
+    return true;
+  } catch (error) {
+    console.error("Kanalga rasm yuborishda xatolik:", error);
+    return false;
+  }
+}
+
 function buildMasterSummary(data) {
   return (
     "📋 Arizangizni tekshiring:\n\n" +
@@ -450,6 +469,7 @@ function buildMasterSummary(data) {
     `📞 Telefon: ${data.phone}\n` +
     `🧰 Xizmat turi: ${data.service}\n` +
     `📍 Hudud: ${data.region}, ${data.district}\n\n` +
+    `🖼 Rasm: ${data.photo ? "bor" : "yo'q"}\n\n` +
     "Ma'lumotlar to'g'ri bo'lsa tasdiqlang:"
   );
 }
@@ -801,7 +821,9 @@ bot.action(/^master:approve:(\d+)$/, async (ctx) => {
     return;
   }
 
-  const posted = await safeSendToChannel(buildMasterChannelPost(master));
+  const posted = master.photo?.fileId
+    ? await safeSendPhotoToChannel(master.photo.fileId, buildMasterChannelPost(master))
+    : await safeSendToChannel(buildMasterChannelPost(master));
   await ctx.reply(posted ? "Usta kanalga chiqarildi." : "Usta tasdiqlandi, lekin kanalga chiqarilmadi. CHANNEL_ID va bot adminligini tekshiring.");
 });
 
@@ -1213,8 +1235,36 @@ bot.on("text", async (ctx) => {
         district: text,
       };
 
-      setState(userId, STEPS.MASTER_CONFIRM, data);
+      setState(userId, STEPS.MASTER_PHOTO, data);
       await ctx.reply("Hudud tanlandi.", Markup.removeKeyboard());
+      await ctx.reply("🖼 E'longa chiqadigan rasmingizni yuboring. Xohlamasangiz, o'tkazib yuboring.", mediaKeyboard);
+      break;
+    }
+
+    case STEPS.MASTER_PHOTO: {
+      if (text === SERVICE_BACK) {
+        setState(userId, STEPS.MASTER_DISTRICT, {
+          name: state.data.name,
+          phone: state.data.phone,
+          service: state.data.service,
+          region: state.data.region,
+        });
+        await ctx.reply(`📍 ${state.data.region} bo'yicha tuman/shaharni tanlang:`, districtKeyboard(state.data.region));
+        return;
+      }
+
+      if (text !== SKIP_MEDIA) {
+        await ctx.reply("Iltimos, rasm yuboring yoki o'tkazib yuborish tugmasini bosing.", mediaKeyboard);
+        return;
+      }
+
+      const data = {
+        ...state.data,
+        photo: null,
+      };
+
+      setState(userId, STEPS.MASTER_CONFIRM, data);
+      await ctx.reply("Rasm o'tkazib yuborildi.", Markup.removeKeyboard());
       await ctx.reply(buildMasterSummary(data), confirmKeyboard);
       break;
     }
@@ -1273,6 +1323,27 @@ bot.on("message", async (ctx) => {
 
   if (!state) {
     await showMainMenu(ctx, "Iltimos, menyudan birini tanlang:");
+    return;
+  }
+
+  if (state.step === STEPS.MASTER_PHOTO) {
+    if (!ctx.message.photo) {
+      await ctx.reply("Iltimos, rasm yuboring yoki o'tkazib yuborish tugmasini bosing.", mediaKeyboard);
+      return;
+    }
+
+    const photos = ctx.message.photo;
+    const data = {
+      ...state.data,
+      photo: {
+        fileId: photos[photos.length - 1].file_id,
+        messageId: ctx.message.message_id,
+      },
+    };
+
+    setState(ctx.from.id, STEPS.MASTER_CONFIRM, data);
+    await ctx.reply("Rasm qabul qilindi.", Markup.removeKeyboard());
+    await ctx.reply(buildMasterSummary(data), confirmKeyboard);
     return;
   }
 
