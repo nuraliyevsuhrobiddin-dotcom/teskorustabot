@@ -8,6 +8,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = Number(process.env.ADMIN_ID || 123456789);
 const CHANNEL_ID = process.env.CHANNEL_ID;
 const CHANNEL_URL = process.env.CHANNEL_URL || (CHANNEL_ID?.startsWith("@") ? `https://t.me/${CHANNEL_ID.slice(1)}` : "");
+const SITE_URL = process.env.SITE_URL || "https://teskorusta.uz";
 
 if (!BOT_TOKEN) {
   console.error("BOT_TOKEN topilmadi. .env faylga BOT_TOKEN qo'shing.");
@@ -45,6 +46,7 @@ const ACTIONS = {
   ADMIN_ANNOUNCE: "admin_announce",
   ADMIN_BROADCAST: "admin_broadcast",
   ADMIN_STATS: "admin_stats",
+  OPEN_SITE: "open_site",
   CANCEL: "cancel",
 };
 
@@ -142,6 +144,7 @@ const mainMenu = Markup.inlineKeyboard([
   [Markup.button.callback("🧰 Usta bo'lish", ACTIONS.BECOME_MASTER)],
   [Markup.button.callback("💬 Admin bilan bog'lanish", ACTIONS.CONTACT_ADMIN)],
   [Markup.button.callback("🚨 Muammo yozish", ACTIONS.REPORT_PROBLEM)],
+  [Markup.button.url("🌐 TeskorUsta.uz", SITE_URL)],
 ]);
 
 const cancelKeyboard = Markup.inlineKeyboard([
@@ -155,6 +158,7 @@ const confirmKeyboard = Markup.inlineKeyboard([
 
 const subscriptionKeyboard = Markup.inlineKeyboard([
   ...(CHANNEL_URL ? [[Markup.button.url("📢 Kanalga o'tish", CHANNEL_URL)]] : []),
+  [Markup.button.url("🌐 Saytga o'tish", SITE_URL)],
   [Markup.button.callback("✅ Obunani tekshirish", ACTIONS.CHECK_SUBSCRIPTION)],
 ]);
 
@@ -392,6 +396,24 @@ function buildMasterAdminMessage(data, ctx) {
   );
 }
 
+function buildPromoFooter() {
+  const lines = [];
+
+  if (SITE_URL) {
+    lines.push(`🌐 Sayt: ${SITE_URL}`);
+  }
+
+  if (CHANNEL_URL) {
+    lines.push(`📢 Kanal: ${CHANNEL_URL}`);
+  }
+
+  return lines.length ? `\n\n${lines.join("\n")}` : "";
+}
+
+function buildAnnouncementPost(text) {
+  return `📢 <b>E'lon</b>\n\n${escapeHtml(text)}${buildPromoFooter()}`;
+}
+
 function buildMasterChannelPost(master) {
   return (
     "🧰 <b>Yangi tasdiqlangan usta</b>\n\n" +
@@ -399,7 +421,8 @@ function buildMasterChannelPost(master) {
     `📞 <b>Telefon:</b> ${escapeHtml(master.phone)}\n` +
     `🔧 <b>Xizmat:</b> ${escapeHtml(master.service)}\n` +
     `📍 <b>Hudud:</b> ${escapeHtml(master.region)}, ${escapeHtml(master.district)}\n` +
-    `💬 <b>Telegram:</b> ${escapeHtml(master.username)}`
+    `💬 <b>Telegram:</b> ${escapeHtml(master.username)}` +
+    buildPromoFooter()
   );
 }
 
@@ -472,7 +495,7 @@ bot.command("elon", async (ctx) => {
     return;
   }
 
-  const sent = await safeSendToChannel(`📢 <b>E'lon</b>\n\n${escapeHtml(text)}`);
+  const sent = await safeSendToChannel(buildAnnouncementPost(text));
   await ctx.reply(sent ? "E'lon kanalga joylandi." : "E'lon yuborilmadi. CHANNEL_ID va bot adminligini tekshiring.");
 });
 
@@ -693,7 +716,7 @@ bot.on("text", async (ctx) => {
         return;
       }
 
-      const sent = await safeSendToChannel(`📢 <b>E'lon</b>\n\n${escapeHtml(text)}`);
+      const sent = await safeSendToChannel(buildAnnouncementPost(text));
       clearState(userId);
       await ctx.reply(sent ? "E'lon kanalga joylandi." : "E'lon yuborilmadi. CHANNEL_ID va bot adminligini tekshiring.", Markup.removeKeyboard());
       await ctx.reply("Admin panel:", adminKeyboard);
