@@ -1,9 +1,13 @@
 require("dotenv").config();
 
+const fs = require("fs");
+const path = require("path");
 const { Telegraf, Markup } = require("telegraf");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = Number(process.env.ADMIN_ID || 123456789);
+const CHANNEL_ID = process.env.CHANNEL_ID;
+const CHANNEL_URL = process.env.CHANNEL_URL || (CHANNEL_ID?.startsWith("@") ? `https://t.me/${CHANNEL_ID.slice(1)}` : "");
 
 if (!BOT_TOKEN) {
   console.error("BOT_TOKEN topilmadi. .env faylga BOT_TOKEN qo'shing.");
@@ -17,10 +21,15 @@ if (!ADMIN_ID || Number.isNaN(ADMIN_ID)) {
 
 const bot = new Telegraf(BOT_TOKEN);
 const userStates = new Map();
+const DATA_DIR = path.join(__dirname, "data");
+const DB_FILE = path.join(DATA_DIR, "db.json");
 
 const BOT_COMMANDS = [
   { command: "start", description: "Botni qayta boshlash" },
   { command: "menu", description: "Asosiy menyuni ochish" },
+  { command: "admin", description: "Admin panel" },
+  { command: "elon", description: "Kanalga e'lon joylash" },
+  { command: "broadcast", description: "Userlarga xabar yuborish" },
 ];
 
 const ACTIONS = {
@@ -28,6 +37,10 @@ const ACTIONS = {
   CONTACT_ADMIN: "contact_admin",
   REPORT_PROBLEM: "report_problem",
   CONFIRM_MASTER: "confirm_master",
+  CHECK_SUBSCRIPTION: "check_subscription",
+  ADMIN_ANNOUNCE: "admin_announce",
+  ADMIN_BROADCAST: "admin_broadcast",
+  ADMIN_STATS: "admin_stats",
   CANCEL: "cancel",
 };
 
@@ -37,6 +50,8 @@ const STEPS = {
   MASTER_SERVICE: "master_service",
   MASTER_REGION: "master_region",
   MASTER_CONFIRM: "master_confirm",
+  ADMIN_ANNOUNCE: "admin_announce",
+  ADMIN_BROADCAST: "admin_broadcast",
   CONTACT_MESSAGE: "contact_message",
   PROBLEM_MESSAGE: "problem_message",
 };
@@ -66,6 +81,17 @@ const cancelKeyboard = Markup.inlineKeyboard([
 const confirmKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback("✅ Tasdiqlash", ACTIONS.CONFIRM_MASTER)],
   [Markup.button.callback("❌ Bekor qilish", ACTIONS.CANCEL)],
+]);
+
+const subscriptionKeyboard = Markup.inlineKeyboard([
+  ...(CHANNEL_URL ? [[Markup.button.url("📢 Kanalga o'tish", CHANNEL_URL)]] : []),
+  [Markup.button.callback("✅ Obunani tekshirish", ACTIONS.CHECK_SUBSCRIPTION)],
+]);
+
+const adminKeyboard = Markup.inlineKeyboard([
+  [Markup.button.callback("📢 E'lon joylash", ACTIONS.ADMIN_ANNOUNCE)],
+  [Markup.button.callback("📣 Broadcast", ACTIONS.ADMIN_BROADCAST)],
+  [Markup.button.callback("📊 Statistika", ACTIONS.ADMIN_STATS)],
 ]);
 
 const serviceKeyboard = Markup.keyboard([
@@ -100,6 +126,80 @@ function clearState(userId) {
   userStates.delete(userId);
 }
 
+function createDefaultDb() {
+  return {
+    users: {},
+    masters: [],
+    nextMasterId: 1,
+  };
+}
+
+function readDb() {
+  try {
+    if (!fs.existsSync(DB_FILE)) {
+      return createDefaultDb();
+    }
+
+    return {
+      ...createDefaultDb(),
+      ...JSON.parse(fs.readFileSync(DB_FILE, "utf8")),
+    };
+  } catch (error) {
+    console.error("Bazani o'qishda xatolik:", error);
+    return createDefaultDb();
+  }
+}
+
+function writeDb(db) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+}
+
+function saveUser(from) {
+  if (!from?.id) return;
+
+  const db = readDb();
+  db.users[from.id] = {
+    id: from.id,
+    firstName: from.first_name || "",
+    username: from.username || "",
+    updatedAt: new Date().toISOString(),
+  };
+  writeDb(db);
+}
+
+function saveMasterRequest(data, ctx) {
+  const db = readDb();
+  const master = {
+    id: db.nextMasterId,
+    status: "pending",
+    userId: ctx.from.id,
+    username: username(ctx),
+    ...data,
+    createdAt: new Date().toISOString(),
+  };
+
+  db.nextMasterId += 1;
+  db.masters.push(master);
+  writeDb(db);
+  return master;
+}
+
+function updateMasterStatus(masterId, status) {
+  const db = readDb();
+  const master = db.masters.find((item) => item.id === masterId);
+  if (!master) return null;
+
+  master.status = status;
+  master.updatedAt = new Date().toISOString();
+  writeDb(db);
+  return master;
+}
+
+function isAdmin(ctx) {
+  return ctx.from?.id === ADMIN_ID;
+}
+
 function normalizePhone(input) {
   return String(input || "").replace(/[^\d+]/g, "");
 }
@@ -124,6 +224,25 @@ async function resetAndShowMainMenu(ctx, text) {
   await showMainMenu(ctx, text);
 }
 
+async function isSubscribed(userId) {
+  if (!CHANNEL_ID) return true;
+
+  try {
+    const member = await bot.telegram.getChatMember(CHANNEL_ID, userId);
+    return ["creator", "administrator", "member"].includes(member.status);
+  } catch (error) {
+    console.error("Kanal obunasini tekshirishda xatolik:", error);
+    return false;
+  }
+}
+
+async function showSubscriptionMessage(ctx) {
+  await ctx.reply(
+    "📢 Botdan foydalanish uchun avval kanalimizga obuna bo'ling.\n\nObuna bo'lgach, \"✅ Obunani tekshirish\" tugmasini bosing.",
+    subscriptionKeyboard
+  );
+}
+
 async function safeSendToAdmin(message, extra = {}) {
   try {
     await bot.telegram.sendMessage(ADMIN_ID, message, {
@@ -143,6 +262,23 @@ async function safeForwardToAdmin(ctx) {
     return true;
   } catch (error) {
     console.error("Admin ga forward qilishda xatolik:", error);
+    return false;
+  }
+}
+
+async function safeSendToChannel(message, extra = {}) {
+  if (!CHANNEL_ID) {
+    return false;
+  }
+
+  try {
+    await bot.telegram.sendMessage(CHANNEL_ID, message, {
+      parse_mode: "HTML",
+      ...extra,
+    });
+    return true;
+  } catch (error) {
+    console.error("Kanalga xabar yuborishda xatolik:", error);
     return false;
   }
 }
@@ -170,12 +306,154 @@ function buildMasterAdminMessage(data, ctx) {
   );
 }
 
+function buildMasterChannelPost(master) {
+  return (
+    "🧰 <b>Yangi tasdiqlangan usta</b>\n\n" +
+    `👤 <b>Ism:</b> ${escapeHtml(master.name)}\n` +
+    `📞 <b>Telefon:</b> ${escapeHtml(master.phone)}\n` +
+    `🔧 <b>Xizmat:</b> ${escapeHtml(master.service)}\n` +
+    `📍 <b>Hudud:</b> ${escapeHtml(master.region)}\n` +
+    `💬 <b>Telegram:</b> ${escapeHtml(master.username)}`
+  );
+}
+
+function masterAdminKeyboard(masterId) {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("✅ Kanalga chiqarish", `master:approve:${masterId}`),
+      Markup.button.callback("❌ Rad etish", `master:reject:${masterId}`),
+    ],
+  ]);
+}
+
+bot.use(async (ctx, next) => {
+  if (!ctx.from) {
+    return next();
+  }
+
+  saveUser(ctx.from);
+
+  if (isAdmin(ctx) || !CHANNEL_ID || ctx.callbackQuery?.data === ACTIONS.CHECK_SUBSCRIPTION) {
+    return next();
+  }
+
+  const subscribed = await isSubscribed(ctx.from.id);
+  if (!subscribed) {
+    await showSubscriptionMessage(ctx);
+    return;
+  }
+
+  return next();
+});
+
 bot.start(async (ctx) => {
   await resetAndShowMainMenu(ctx);
 });
 
 bot.command("menu", async (ctx) => {
   await resetAndShowMainMenu(ctx);
+});
+
+bot.command("admin", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply("Bu bo'lim faqat admin uchun.");
+    return;
+  }
+
+  clearState(ctx.from.id);
+  await ctx.reply("Admin panel:", adminKeyboard);
+});
+
+bot.command("elon", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply("Bu komanda faqat admin uchun.");
+    return;
+  }
+
+  const text = ctx.message.text.replace(/^\/elon(@\w+)?\s*/i, "").trim();
+  if (!text) {
+    setState(ctx.from.id, STEPS.ADMIN_ANNOUNCE, {});
+    await ctx.reply("Kanalga joylanadigan e'lon matnini yuboring:", cancelKeyboard);
+    return;
+  }
+
+  const sent = await safeSendToChannel(`📢 <b>E'lon</b>\n\n${escapeHtml(text)}`);
+  await ctx.reply(sent ? "E'lon kanalga joylandi." : "E'lon yuborilmadi. CHANNEL_ID va bot adminligini tekshiring.");
+});
+
+bot.command("broadcast", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply("Bu komanda faqat admin uchun.");
+    return;
+  }
+
+  const text = ctx.message.text.replace(/^\/broadcast(@\w+)?\s*/i, "").trim();
+  if (!text) {
+    setState(ctx.from.id, STEPS.ADMIN_BROADCAST, {});
+    await ctx.reply("Userlarga yuboriladigan xabar matnini yuboring:", cancelKeyboard);
+    return;
+  }
+
+  const db = readDb();
+  let sentCount = 0;
+  for (const userId of Object.keys(db.users)) {
+    try {
+      await bot.telegram.sendMessage(userId, text);
+      sentCount += 1;
+    } catch (error) {
+      console.error(`Broadcast yuborilmadi. User ID: ${userId}`, error);
+    }
+  }
+
+  await ctx.reply(`Broadcast tugadi. Yuborildi: ${sentCount} ta user.`);
+});
+
+bot.action(ACTIONS.CHECK_SUBSCRIPTION, async (ctx) => {
+  await ctx.answerCbQuery();
+
+  const subscribed = await isSubscribed(ctx.from.id);
+  if (!subscribed) {
+    await showSubscriptionMessage(ctx);
+    return;
+  }
+
+  await resetAndShowMainMenu(ctx, "✅ Obuna tasdiqlandi. Kerakli bo'limni tanlang:");
+});
+
+bot.action(ACTIONS.ADMIN_ANNOUNCE, async (ctx) => {
+  await ctx.answerCbQuery();
+  if (!isAdmin(ctx)) return;
+
+  setState(ctx.from.id, STEPS.ADMIN_ANNOUNCE, {});
+  await ctx.reply("Kanalga joylanadigan e'lon matnini yuboring:", cancelKeyboard);
+});
+
+bot.action(ACTIONS.ADMIN_BROADCAST, async (ctx) => {
+  await ctx.answerCbQuery();
+  if (!isAdmin(ctx)) return;
+
+  setState(ctx.from.id, STEPS.ADMIN_BROADCAST, {});
+  await ctx.reply("Userlarga yuboriladigan xabar matnini yuboring:", cancelKeyboard);
+});
+
+bot.action(ACTIONS.ADMIN_STATS, async (ctx) => {
+  await ctx.answerCbQuery();
+  if (!isAdmin(ctx)) return;
+
+  const db = readDb();
+  const masters = db.masters || [];
+  const pending = masters.filter((item) => item.status === "pending").length;
+  const approved = masters.filter((item) => item.status === "approved").length;
+  const rejected = masters.filter((item) => item.status === "rejected").length;
+
+  await ctx.reply(
+    "📊 Statistika\n\n" +
+    `👥 Userlar: ${Object.keys(db.users || {}).length}\n` +
+    `🧰 Jami arizalar: ${masters.length}\n` +
+    `⏳ Kutilmoqda: ${pending}\n` +
+    `✅ Tasdiqlangan: ${approved}\n` +
+    `❌ Rad etilgan: ${rejected}`
+  );
 });
 
 bot.action(ACTIONS.CANCEL, async (ctx) => {
@@ -194,7 +472,8 @@ bot.action(ACTIONS.CONFIRM_MASTER, async (ctx) => {
     return;
   }
 
-  const sent = await safeSendToAdmin(buildMasterAdminMessage(state.data, ctx));
+  const master = saveMasterRequest(state.data, ctx);
+  const sent = await safeSendToAdmin(buildMasterAdminMessage(master, ctx), masterAdminKeyboard(master.id));
   clearState(ctx.from.id);
 
   if (!sent) {
@@ -204,6 +483,28 @@ bot.action(ACTIONS.CONFIRM_MASTER, async (ctx) => {
 
   await ctx.reply("👉 Rahmat! Sizning so'rovingiz yuborildi", Markup.removeKeyboard());
   await showMainMenu(ctx, "Yana qanday yordam bera olamiz?");
+});
+
+bot.action(/^master:approve:(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  if (!isAdmin(ctx)) return;
+
+  const master = updateMasterStatus(Number(ctx.match[1]), "approved");
+  if (!master) {
+    await ctx.reply("Ariza topilmadi.");
+    return;
+  }
+
+  const posted = await safeSendToChannel(buildMasterChannelPost(master));
+  await ctx.reply(posted ? "Usta kanalga chiqarildi." : "Usta tasdiqlandi, lekin kanalga chiqarilmadi. CHANNEL_ID va bot adminligini tekshiring.");
+});
+
+bot.action(/^master:reject:(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  if (!isAdmin(ctx)) return;
+
+  const master = updateMasterStatus(Number(ctx.match[1]), "rejected");
+  await ctx.reply(master ? "Ariza rad etildi." : "Ariza topilmadi.");
 });
 
 bot.action(ACTIONS.BECOME_MASTER, async (ctx) => {
@@ -290,6 +591,44 @@ bot.on("text", async (ctx) => {
   }
 
   switch (state.step) {
+    case STEPS.ADMIN_ANNOUNCE: {
+      if (!isAdmin(ctx)) {
+        clearState(userId);
+        await showMainMenu(ctx);
+        return;
+      }
+
+      const sent = await safeSendToChannel(`📢 <b>E'lon</b>\n\n${escapeHtml(text)}`);
+      clearState(userId);
+      await ctx.reply(sent ? "E'lon kanalga joylandi." : "E'lon yuborilmadi. CHANNEL_ID va bot adminligini tekshiring.", Markup.removeKeyboard());
+      await ctx.reply("Admin panel:", adminKeyboard);
+      break;
+    }
+
+    case STEPS.ADMIN_BROADCAST: {
+      if (!isAdmin(ctx)) {
+        clearState(userId);
+        await showMainMenu(ctx);
+        return;
+      }
+
+      const db = readDb();
+      let sentCount = 0;
+      for (const savedUserId of Object.keys(db.users)) {
+        try {
+          await bot.telegram.sendMessage(savedUserId, text);
+          sentCount += 1;
+        } catch (error) {
+          console.error(`Broadcast yuborilmadi. User ID: ${savedUserId}`, error);
+        }
+      }
+
+      clearState(userId);
+      await ctx.reply(`Broadcast tugadi. Yuborildi: ${sentCount} ta user.`, Markup.removeKeyboard());
+      await ctx.reply("Admin panel:", adminKeyboard);
+      break;
+    }
+
     case STEPS.MASTER_NAME: {
       if (text.length < 2) {
         await ctx.reply("Iltimos, ismingizni to'g'ri kiriting:");
