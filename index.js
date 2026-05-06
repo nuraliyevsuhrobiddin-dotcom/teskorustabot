@@ -4,11 +4,25 @@ const fs = require("fs");
 const path = require("path");
 const { Telegraf, Markup } = require("telegraf");
 
+function normalizeHttpUrl(url) {
+  const value = String(url || "").trim();
+  if (!value) return "";
+  if (/^https?:\/\//i.test(value)) return value;
+  return `https://${value}`;
+}
+
+function normalizeSupabaseUrl(url) {
+  return normalizeHttpUrl(url).replace(/\/rest\/v1\/?$/i, "");
+}
+
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = Number(process.env.ADMIN_ID || 123456789);
 const CHANNEL_ID = process.env.CHANNEL_ID;
-const CHANNEL_URL = process.env.CHANNEL_URL || (CHANNEL_ID?.startsWith("@") ? `https://t.me/${CHANNEL_ID.slice(1)}` : "");
-const SITE_URL = process.env.SITE_URL || "https://teskorusta24.uz";
+const CHANNEL_URL = normalizeHttpUrl(process.env.CHANNEL_URL || (CHANNEL_ID?.startsWith("@") ? `t.me/${CHANNEL_ID.slice(1)}` : ""));
+const SITE_URL = normalizeHttpUrl(process.env.SITE_URL || "https://teskorusta24.uz");
+const SUPABASE_URL = normalizeSupabaseUrl(process.env.SUPABASE_URL);
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const USE_SUPABASE = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
 
 if (!BOT_TOKEN) {
   console.error("BOT_TOKEN topilmadi. .env faylga BOT_TOKEN qo'shing.");
@@ -22,8 +36,12 @@ if (!ADMIN_ID || Number.isNaN(ADMIN_ID)) {
 
 const bot = new Telegraf(BOT_TOKEN);
 const userStates = new Map();
+const userRateLimits = new Map();
 const DATA_DIR = path.join(__dirname, "data");
 const DB_FILE = path.join(DATA_DIR, "db.json");
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT_MAX_UPDATES = 20;
+const BROADCAST_DELAY_MS = 75;
 
 const USER_COMMANDS = [
   { command: "start", description: "Botni qayta boshlash" },
@@ -257,6 +275,26 @@ function clearState(userId) {
   userStates.delete(userId);
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRateLimited(userId) {
+  const now = Date.now();
+  const current = userRateLimits.get(userId);
+
+  if (!current || now - current.startedAt > RATE_LIMIT_WINDOW_MS) {
+    userRateLimits.set(userId, {
+      startedAt: now,
+      count: 1,
+    });
+    return false;
+  }
+
+  current.count += 1;
+  return current.count > RATE_LIMIT_MAX_UPDATES;
+}
+
 function createDefaultDb() {
   return {
     users: {},
@@ -288,8 +326,81 @@ function writeDb(db) {
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
 }
 
-function saveUser(from) {
+async function supabaseRequest(table, options = {}) {
+  const {
+    method = "GET",
+    query = "",
+    body,
+    prefer,
+  } = options;
+  const baseUrl = SUPABASE_URL.replace(/\/$/, "");
+  const response = await fetch(`${baseUrl}/rest/v1/${table}${query}`, {
+    method,
+    headers: {
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      "Content-Type": "application/json",
+      ...(prefer ? { Prefer: prefer } : {}),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+
+  if (!response.ok) {
+    const details = await response.text().catch(() => "");
+    throw new Error(`Supabase ${method} ${table} failed: ${response.status} ${details}`);
+  }
+
+  if (response.status === 204) return null;
+  return response.json();
+}
+
+function mapSupabaseMaster(row) {
+  if (!row) return null;
+  return {
+    ...(row.data || {}),
+    id: row.id,
+    status: row.status,
+    userId: row.user_id,
+    username: row.username,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapSupabaseOrder(row) {
+  if (!row) return null;
+  return {
+    ...(row.data || {}),
+    id: row.id,
+    status: row.status,
+    userId: row.user_id,
+    username: row.username,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function saveUser(from) {
   if (!from?.id) return;
+
+  if (USE_SUPABASE) {
+    try {
+      await supabaseRequest("users", {
+        method: "POST",
+        query: "?on_conflict=id",
+        prefer: "resolution=merge-duplicates",
+        body: [{
+          id: from.id,
+          first_name: from.first_name || "",
+          username: from.username || "",
+          updated_at: new Date().toISOString(),
+        }],
+      });
+      return;
+    } catch (error) {
+      console.error("Supabase user saqlashda xatolik:", error);
+    }
+  }
 
   const db = readDb();
   db.users[from.id] = {
@@ -301,7 +412,25 @@ function saveUser(from) {
   writeDb(db);
 }
 
-function saveMasterRequest(data, ctx) {
+async function saveMasterRequest(data, ctx) {
+  if (USE_SUPABASE) {
+    try {
+      const rows = await supabaseRequest("masters", {
+        method: "POST",
+        prefer: "return=representation",
+        body: [{
+          status: "pending",
+          user_id: ctx.from.id,
+          username: username(ctx),
+          data,
+        }],
+      });
+      return mapSupabaseMaster(rows?.[0]);
+    } catch (error) {
+      console.error("Supabase usta arizasini saqlashda xatolik:", error);
+    }
+  }
+
   const db = readDb();
   const master = {
     id: db.nextMasterId,
@@ -318,7 +447,24 @@ function saveMasterRequest(data, ctx) {
   return master;
 }
 
-function updateMasterStatus(masterId, status) {
+async function updateMasterStatus(masterId, status) {
+  if (USE_SUPABASE) {
+    try {
+      const rows = await supabaseRequest("masters", {
+        method: "PATCH",
+        query: `?id=eq.${masterId}`,
+        prefer: "return=representation",
+        body: {
+          status,
+          updated_at: new Date().toISOString(),
+        },
+      });
+      return mapSupabaseMaster(rows?.[0]);
+    } catch (error) {
+      console.error("Supabase usta statusini yangilashda xatolik:", error);
+    }
+  }
+
   const db = readDb();
   const master = db.masters.find((item) => item.id === masterId);
   if (!master) return null;
@@ -329,7 +475,25 @@ function updateMasterStatus(masterId, status) {
   return master;
 }
 
-function saveOrderRequest(data, ctx) {
+async function saveOrderRequest(data, ctx) {
+  if (USE_SUPABASE) {
+    try {
+      const rows = await supabaseRequest("orders", {
+        method: "POST",
+        prefer: "return=representation",
+        body: [{
+          status: "new",
+          user_id: ctx.from.id,
+          username: username(ctx),
+          data,
+        }],
+      });
+      return mapSupabaseOrder(rows?.[0]);
+    } catch (error) {
+      console.error("Supabase buyurtmani saqlashda xatolik:", error);
+    }
+  }
+
   const db = readDb();
   const order = {
     id: db.nextOrderId,
@@ -346,7 +510,24 @@ function saveOrderRequest(data, ctx) {
   return order;
 }
 
-function updateOrderStatus(orderId, status) {
+async function updateOrderStatus(orderId, status) {
+  if (USE_SUPABASE) {
+    try {
+      const rows = await supabaseRequest("orders", {
+        method: "PATCH",
+        query: `?id=eq.${orderId}`,
+        prefer: "return=representation",
+        body: {
+          status,
+          updated_at: new Date().toISOString(),
+        },
+      });
+      return mapSupabaseOrder(rows?.[0]);
+    } catch (error) {
+      console.error("Supabase buyurtma statusini yangilashda xatolik:", error);
+    }
+  }
+
   const db = readDb();
   const order = db.orders.find((item) => item.id === orderId);
   if (!order) return null;
@@ -355,6 +536,48 @@ function updateOrderStatus(orderId, status) {
   order.updatedAt = new Date().toISOString();
   writeDb(db);
   return order;
+}
+
+async function getUserIds() {
+  if (USE_SUPABASE) {
+    try {
+      const users = await supabaseRequest("users", {
+        query: "?select=id",
+      });
+      return users.map((user) => String(user.id));
+    } catch (error) {
+      console.error("Supabase userlarni olishda xatolik:", error);
+    }
+  }
+
+  const db = readDb();
+  return Object.keys(db.users || {});
+}
+
+async function getStats() {
+  if (USE_SUPABASE) {
+    try {
+      const [users, masters, orders] = await Promise.all([
+        supabaseRequest("users", { query: "?select=id" }),
+        supabaseRequest("masters", { query: "?select=status" }),
+        supabaseRequest("orders", { query: "?select=status,data" }),
+      ]);
+      return {
+        usersCount: users.length,
+        masters: masters.map((master) => ({ status: master.status })),
+        orders: orders.map(mapSupabaseOrder),
+      };
+    } catch (error) {
+      console.error("Supabase statistikani olishda xatolik:", error);
+    }
+  }
+
+  const db = readDb();
+  return {
+    usersCount: Object.keys(db.users || {}).length,
+    masters: db.masters || [],
+    orders: db.orders || [],
+  };
 }
 
 function isAdmin(ctx) {
@@ -460,6 +683,25 @@ async function safeSendPhotoToChannel(photoFileId, caption, extra = {}) {
     console.error("Kanalga rasm yuborishda xatolik:", error);
     return false;
   }
+}
+
+async function broadcastToUsers(text) {
+  let sentCount = 0;
+  let failedCount = 0;
+
+  for (const userId of await getUserIds()) {
+    try {
+      await bot.telegram.sendMessage(userId, text);
+      sentCount += 1;
+    } catch (error) {
+      failedCount += 1;
+      console.error(`Broadcast yuborilmadi. User ID: ${userId}`, error);
+    }
+
+    await sleep(BROADCAST_DELAY_MS);
+  }
+
+  return { sentCount, failedCount };
 }
 
 function buildMasterSummary(data) {
@@ -581,9 +823,22 @@ bot.use(async (ctx, next) => {
     return next();
   }
 
-  saveUser(ctx.from);
+  await saveUser(ctx.from);
 
-  if (isAdmin(ctx) || !CHANNEL_ID || ctx.callbackQuery?.data === ACTIONS.CHECK_SUBSCRIPTION) {
+  if (isAdmin(ctx)) {
+    return next();
+  }
+
+  if (isRateLimited(ctx.from.id)) {
+    if (ctx.callbackQuery) {
+      await ctx.answerCbQuery("Juda ko'p so'rov yuborildi. Bir ozdan keyin urinib ko'ring.").catch(() => {});
+    } else {
+      await ctx.reply("Juda ko'p so'rov yuborildi. Iltimos, bir ozdan keyin urinib ko'ring.");
+    }
+    return;
+  }
+
+  if (!CHANNEL_ID || ctx.callbackQuery?.data === ACTIONS.CHECK_SUBSCRIPTION) {
     return next();
   }
 
@@ -653,18 +908,8 @@ bot.command("broadcast", async (ctx) => {
     return;
   }
 
-  const db = readDb();
-  let sentCount = 0;
-  for (const userId of Object.keys(db.users)) {
-    try {
-      await bot.telegram.sendMessage(userId, text);
-      sentCount += 1;
-    } catch (error) {
-      console.error(`Broadcast yuborilmadi. User ID: ${userId}`, error);
-    }
-  }
-
-  await ctx.reply(`Broadcast tugadi. Yuborildi: ${sentCount} ta user.`);
+  const { sentCount, failedCount } = await broadcastToUsers(text);
+  await ctx.reply(`Broadcast tugadi. Yuborildi: ${sentCount} ta user. Xato: ${failedCount} ta.`);
 });
 
 bot.action(ACTIONS.CHECK_SUBSCRIPTION, async (ctx) => {
@@ -699,9 +944,9 @@ bot.action(ACTIONS.ADMIN_STATS, async (ctx) => {
   await ctx.answerCbQuery();
   if (!isAdmin(ctx)) return;
 
-  const db = readDb();
-  const masters = db.masters || [];
-  const orders = db.orders || [];
+  const stats = await getStats();
+  const masters = stats.masters || [];
+  const orders = stats.orders || [];
   const pending = masters.filter((item) => item.status === "pending").length;
   const approved = masters.filter((item) => item.status === "approved").length;
   const rejected = masters.filter((item) => item.status === "rejected").length;
@@ -710,7 +955,7 @@ bot.action(ACTIONS.ADMIN_STATS, async (ctx) => {
 
   await ctx.reply(
     "📊 Statistika\n\n" +
-    `👥 Userlar: ${Object.keys(db.users || {}).length}\n` +
+    `👥 Userlar: ${stats.usersCount}\n` +
     `🧰 Jami arizalar: ${masters.length}\n` +
     `⏳ Kutilmoqda: ${pending}\n` +
     `✅ Tasdiqlangan: ${approved}\n` +
@@ -754,7 +999,7 @@ bot.action(ACTIONS.CONFIRM_MASTER, async (ctx) => {
     return;
   }
 
-  const master = saveMasterRequest(state.data, ctx);
+  const master = await saveMasterRequest(state.data, ctx);
   const sent = await safeSendToAdmin(buildMasterAdminMessage(master, ctx), masterAdminKeyboard(master.id));
   clearState(ctx.from.id);
 
@@ -776,7 +1021,7 @@ bot.action(ACTIONS.CONFIRM_ORDER, async (ctx) => {
     return;
   }
 
-  const order = saveOrderRequest(state.data, ctx);
+  const order = await saveOrderRequest(state.data, ctx);
   const sent = await safeSendToAdmin(buildOrderAdminMessage(order), orderAdminKeyboard(order.id));
   clearState(ctx.from.id);
 
@@ -799,7 +1044,7 @@ bot.action(/^order:status:(\d+):(.+)$/, async (ctx) => {
   await ctx.answerCbQuery();
   if (!isAdmin(ctx)) return;
 
-  const order = updateOrderStatus(Number(ctx.match[1]), ctx.match[2]);
+  const order = await updateOrderStatus(Number(ctx.match[1]), ctx.match[2]);
   if (!order) {
     await ctx.reply("Buyurtma topilmadi.");
     return;
@@ -815,7 +1060,7 @@ bot.action(/^master:approve:(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery();
   if (!isAdmin(ctx)) return;
 
-  const master = updateMasterStatus(Number(ctx.match[1]), "approved");
+  const master = await updateMasterStatus(Number(ctx.match[1]), "approved");
   if (!master) {
     await ctx.reply("Ariza topilmadi.");
     return;
@@ -831,7 +1076,7 @@ bot.action(/^master:reject:(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery();
   if (!isAdmin(ctx)) return;
 
-  const master = updateMasterStatus(Number(ctx.match[1]), "rejected");
+  const master = await updateMasterStatus(Number(ctx.match[1]), "rejected");
   await ctx.reply(master ? "Ariza rad etildi." : "Ariza topilmadi.");
 });
 
@@ -1121,19 +1366,9 @@ bot.on("text", async (ctx) => {
         return;
       }
 
-      const db = readDb();
-      let sentCount = 0;
-      for (const savedUserId of Object.keys(db.users)) {
-        try {
-          await bot.telegram.sendMessage(savedUserId, text);
-          sentCount += 1;
-        } catch (error) {
-          console.error(`Broadcast yuborilmadi. User ID: ${savedUserId}`, error);
-        }
-      }
-
+      const { sentCount, failedCount } = await broadcastToUsers(text);
       clearState(userId);
-      await ctx.reply(`Broadcast tugadi. Yuborildi: ${sentCount} ta user.`, Markup.removeKeyboard());
+      await ctx.reply(`Broadcast tugadi. Yuborildi: ${sentCount} ta user. Xato: ${failedCount} ta.`, Markup.removeKeyboard());
       await ctx.reply("Admin panel:", adminKeyboard);
       break;
     }
