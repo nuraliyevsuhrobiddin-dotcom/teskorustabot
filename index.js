@@ -8,7 +8,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = Number(process.env.ADMIN_ID || 123456789);
 const CHANNEL_ID = process.env.CHANNEL_ID;
 const CHANNEL_URL = process.env.CHANNEL_URL || (CHANNEL_ID?.startsWith("@") ? `https://t.me/${CHANNEL_ID.slice(1)}` : "");
-const SITE_URL = process.env.SITE_URL || "https://teskorusta.uz";
+const SITE_URL = process.env.SITE_URL || "https://teskorusta24.uz";
 
 if (!BOT_TOKEN) {
   console.error("BOT_TOKEN topilmadi. .env faylga BOT_TOKEN qo'shing.");
@@ -166,7 +166,7 @@ const mainMenu = Markup.inlineKeyboard([
   [Markup.button.callback("🧰 Usta bo'lish", ACTIONS.BECOME_MASTER)],
   [Markup.button.callback("💬 Admin bilan bog'lanish", ACTIONS.CONTACT_ADMIN)],
   [Markup.button.callback("🚨 Muammo yozish", ACTIONS.REPORT_PROBLEM)],
-  [Markup.button.url("🌐 TeskorUsta.uz", SITE_URL)],
+  [Markup.button.url("🌐 teskorusta24.uz", SITE_URL)],
 ]);
 
 const cancelKeyboard = Markup.inlineKeyboard([

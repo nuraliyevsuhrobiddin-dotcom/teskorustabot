@@ -29,7 +29,7 @@ BOT_TOKEN=PASTE_YOUR_TELEGRAM_BOT_TOKEN_HERE
 ADMIN_ID=123456789
 CHANNEL_ID=@your_channel_username
 CHANNEL_URL=https://t.me/your_channel_username
-SITE_URL=https://teskorusta.uz
+SITE_URL=https://teskorusta24.uz
 ```
 
 4. Botni ishga tushiring:
