@@ -30,6 +30,7 @@ ADMIN_ID=123456789
 CHANNEL_ID=@your_channel_username
 CHANNEL_URL=https://t.me/your_channel_username
 SITE_URL=https://teskorusta24.uz
+SERVICE_NAME=test6
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 ```
@@ -45,6 +46,14 @@ Development rejimida:
 ```bash
 npm run dev
 ```
+
+Render Web Service bot ishlayotganini tekshirishi uchun app `PORT` orqali HTTP health server ham ochadi:
+
+- `/` - umumiy status
+- `/health` - health check
+- `/test6` - test6 status endpoint
+
+Render env sozlamalarida `SERVICE_NAME=test6` qo'yish mumkin. `PORT` ni Render o'zi beradi.
 
 ## Supabase
 

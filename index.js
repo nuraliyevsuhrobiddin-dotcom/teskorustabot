@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const fs = require("fs");
+const http = require("http");
 const path = require("path");
 const { Telegraf, Markup } = require("telegraf");
 
@@ -17,12 +18,15 @@ function normalizeSupabaseUrl(url) {
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = Number(process.env.ADMIN_ID || 123456789);
-const CHANNEL_ID = process.env.CHANNEL_ID;
+const CHANNEL_ID = String(process.env.CHANNEL_ID || "").trim();
 const CHANNEL_URL = normalizeHttpUrl(process.env.CHANNEL_URL || (CHANNEL_ID?.startsWith("@") ? `t.me/${CHANNEL_ID.slice(1)}` : ""));
 const SITE_URL = normalizeHttpUrl(process.env.SITE_URL || "https://teskorusta24.uz");
 const SUPABASE_URL = normalizeSupabaseUrl(process.env.SUPABASE_URL);
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const USE_SUPABASE = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
+const PORT = Number(process.env.PORT || 3000);
+const SERVICE_NAME = String(process.env.SERVICE_NAME || process.env.RENDER_SERVICE_NAME || "test6");
+let botReady = false;
 
 if (!BOT_TOKEN) {
   console.error("BOT_TOKEN topilmadi. .env faylga BOT_TOKEN qo'shing.");
@@ -42,6 +46,7 @@ const DB_FILE = path.join(DATA_DIR, "db.json");
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX_UPDATES = 20;
 const BROADCAST_DELAY_MS = 75;
+const startedAt = new Date();
 
 const USER_COMMANDS = [
   { command: "start", description: "Botni qayta boshlash" },
@@ -615,7 +620,8 @@ async function isSubscribed(userId) {
     const member = await bot.telegram.getChatMember(CHANNEL_ID, userId);
     return ["creator", "administrator", "member"].includes(member.status);
   } catch (error) {
-    console.error("Kanal obunasini tekshirishda xatolik:", error);
+    const description = error?.response?.description || error?.message || String(error);
+    console.error(`Kanal obunasini tekshirishda xatolik. CHANNEL_ID=${CHANNEL_ID}: ${description}`);
     return false;
   }
 }
@@ -1631,8 +1637,46 @@ bot.catch((error, ctx) => {
   console.error(`Bot xatoligi. Update ID: ${ctx.update?.update_id}`, error);
 });
 
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+function startHealthServer() {
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+    const payload = {
+      service: SERVICE_NAME,
+      ok: botReady,
+      bot: botReady ? "running" : "starting",
+      uptime: Math.round(process.uptime()),
+      startedAt: startedAt.toISOString(),
+    };
+
+    if (url.pathname === "/" || url.pathname === "/health" || url.pathname === "/test6") {
+      res.writeHead(botReady ? 200 : 503, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify(payload));
+      return;
+    }
+
+    res.writeHead(404, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: "Not found" }));
+  });
+
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`${SERVICE_NAME} health server ${PORT}-portda ishga tushdi.`);
+  });
+
+  return server;
+}
+
+const healthServer = startHealthServer();
+
+function stopApp(signal) {
+  botReady = false;
+  bot.stop(signal);
+  healthServer.close(() => {
+    console.log(`${signal} qabul qilindi. Server to'xtadi.`);
+  });
+}
+
+process.once("SIGINT", () => stopApp("SIGINT"));
+process.once("SIGTERM", () => stopApp("SIGTERM"));
 
 async function configureBotCommands() {
   await bot.telegram.setMyCommands(USER_COMMANDS);
@@ -1645,10 +1689,13 @@ async function configureBotCommands() {
 }
 
 configureBotCommands()
-  .then(() => bot.launch(() => {
+  .then(() => bot.telegram.deleteWebhook({ drop_pending_updates: false }))
+  .then(() => bot.launch({}, () => {
+    botReady = true;
     console.log("TeskorUsta24 bot ishga tushdi.");
   }))
   .catch((error) => {
     console.error("Bot menyusini sozlashda xatolik:", error);
+    healthServer.close();
     process.exit(1);
   });
