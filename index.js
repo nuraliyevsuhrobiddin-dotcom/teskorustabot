@@ -16,9 +16,15 @@ function normalizeSupabaseUrl(url) {
   return normalizeHttpUrl(url).replace(/\/rest\/v1\/?$/i, "");
 }
 
+function channelIdFromUrl(url) {
+  const value = String(url || "").trim();
+  const match = value.match(/(?:https?:\/\/)?t\.me\/([A-Za-z0-9_]+)/i);
+  return match ? `@${match[1]}` : "";
+}
+
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = Number(process.env.ADMIN_ID || 123456789);
-const CHANNEL_ID = String(process.env.CHANNEL_ID || "").trim();
+const CHANNEL_ID = String(process.env.CHANNEL_ID || channelIdFromUrl(process.env.CHANNEL_URL) || "").trim();
 const CHANNEL_URL = normalizeHttpUrl(process.env.CHANNEL_URL || (CHANNEL_ID?.startsWith("@") ? `t.me/${CHANNEL_ID.slice(1)}` : ""));
 const SITE_URL = normalizeHttpUrl(process.env.SITE_URL || "https://teskorusta24.uz");
 const SUPABASE_URL = normalizeSupabaseUrl(process.env.SUPABASE_URL);
@@ -831,10 +837,6 @@ bot.use(async (ctx, next) => {
 
   await saveUser(ctx.from);
 
-  if (isAdmin(ctx)) {
-    return next();
-  }
-
   if (isRateLimited(ctx.from.id)) {
     if (ctx.callbackQuery) {
       await ctx.answerCbQuery("Juda ko'p so'rov yuborildi. Bir ozdan keyin urinib ko'ring.").catch(() => {});
@@ -1644,6 +1646,7 @@ function startHealthServer() {
       service: SERVICE_NAME,
       ok: botReady,
       bot: botReady ? "running" : "starting",
+      channelRequired: Boolean(CHANNEL_ID),
       uptime: Math.round(process.uptime()),
       startedAt: startedAt.toISOString(),
     };

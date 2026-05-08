@@ -55,6 +55,8 @@ Render Web Service bot ishlayotganini tekshirishi uchun app `PORT` orqali HTTP h
 
 Render env sozlamalarida `SERVICE_NAME=test6` qo'yish mumkin. `PORT` ni Render o'zi beradi.
 
+Majburiy kanal obunasi ishlashi uchun Render env ichida `CHANNEL_ID` yoki `CHANNEL_URL` bo'lishi kerak. Bot kanalga admin/member qilib qo'yilmasa, Telegram `getChatMember` orqali obunani tekshira olmaydi.
+
 ## Supabase
 
 Bot `SUPABASE_URL` va `SUPABASE_SERVICE_ROLE_KEY` berilsa Supabase ishlatadi. Bu qiymatlar bo'sh bo'lsa, eski `data/db.json` fayl fallback sifatida ishlaydi.
